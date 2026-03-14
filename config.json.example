@@ -1,5 +1,7 @@
 {    
     "PIN_BUTTON": 9,
     "PIN_5V": 10,
-    "PIN_VBAT": 3
+    "PIN_VBAT": 3,
+
+    "ESP32_SERIAL_PORT": "COM3"
 }
