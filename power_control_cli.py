@@ -3,12 +3,17 @@ power_control_cli.py — Host-side CLI for ESP32-C3 Power Control.
 
 Send commands (5V ON/OFF, VBAT ON/OFF, STATUS) over:
   - COM (serial/UART)
+  - WiFi (TCP socket)
+  - Auto-detect (tries COM → WiFi → BLE)
 
 Configuration via config.json:
   - ESP32_SERIAL_PORT: Default serial port
+  - ESP32_IP: Default WiFi IP address
+  - ESP32_PORT: Default WiFi TCP port (default: 8080)
 
 Usage:
-    python power_control_cli.py --port COM3 "5V ON"
+    python power_control_cli.py --mode com --port COM3 "5V ON"
+    python power_control_cli.py --mode wifi --host 192.168.1.111 "VBAT OFF"
     python power_control_cli.py "5V ON"           # auto-detect
     python power_control_cli.py --interactive     # interactive REPL
 '''
@@ -16,6 +21,7 @@ Usage:
 import argparse
 import json
 import os
+import socket
 import sys
 import time
 
@@ -39,6 +45,8 @@ def load_config():
 
 
 CONFIG = load_config()
+
+WIFI_PORT = CONFIG.get('ESP32_PORT', 8080) 
 
 
 def send_via_com(command, port=None, baudrate=115200, timeout=2, ser=None):
@@ -93,6 +101,44 @@ def find_serial_port():
     return None
 
 
+def send_via_wifi(command, host, port=WIFI_PORT, timeout=3):
+    '''Send command over TCP and return response.'''
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        sock.sendall((command + '\n').encode('utf-8'))
+        data = sock.recv(256)
+        return data.decode('utf-8').strip()
+    
+
+def detect_auto_transport(host=None, port=None, baudrate=115200):
+    '''Probe transports with STATUS command, return send_fn for the first working one.'''
+
+    # 1. Try COM
+    serial_port = find_serial_port()
+    if serial_port:
+        try:
+            print('[Auto] Trying COM ({})...'.format(serial_port))
+            resp = send_via_com('STATUS', serial_port, baudrate)
+            print('[Auto] COM connected: {}'.format(resp))
+            return lambda cmd: send_via_com(cmd, serial_port, baudrate)
+        except Exception as e:
+            print('[Auto] COM failed: {}'.format(e))
+
+    # 2. Try WiFi
+    if host:
+        try:
+            wifi_port = port or WIFI_PORT
+            print('[Auto] Trying WiFi ({}:{})...'.format(host, wifi_port))
+            resp = send_via_wifi('STATUS', host, wifi_port)
+            print('[Auto] WiFi connected: {}'.format(resp))
+            return lambda cmd: send_via_wifi(cmd, host, wifi_port)
+        except Exception as e:
+            print('[Auto] WiFi failed: {}'.format(e))
+
+    return None
+
+
 def interactive_loop(send_fn):
     '''REPL-style interactive command loop.'''
     print('Interactive mode. Type commands or "quit" to exit.')
@@ -120,6 +166,8 @@ def interactive_loop(send_fn):
 
 def build_parser():
     # Get defaults from config.json
+    default_host = CONFIG.get('ESP32_IP')
+    default_port = int(WIFI_PORT)
     default_serial_port = CONFIG.get('ESP32_SERIAL_PORT')
 
     parser = argparse.ArgumentParser(
@@ -128,7 +176,8 @@ def build_parser():
         epilog=(
             'Examples:\n'
             '  python power_control_cli.py "5V ON"\n'
-            '  python power_control_cli.py --port COM3 "VBAT OFF"\n'
+            '  python power_control_cli.py --mode com --port COM3 "VBAT OFF"\n'
+            '  python power_control_cli.py --mode wifi --host 192.168.1.111 "STATUS"\n'
             '  python power_control_cli.py --interactive\n'
         ),
     )
@@ -138,11 +187,30 @@ def build_parser():
         help='Command to send (e.g. "5V ON", "VBAT OFF", "STATUS")',
     )
     parser.add_argument(
+        '--mode', '-m',
+        choices=['auto', 'com', 'wifi'],
+        default='auto',
+        help='Transport mode (default: auto)',
+    )
+    parser.add_argument(
         '--port', '-p',
         default=default_serial_port,
         help='Serial port (e.g. COM3, /dev/ttyUSB0, default from config.json: {})'.format(
             default_serial_port or 'auto-detect'
         ),
+    )
+    parser.add_argument(
+        '--host', '-H',
+        default=default_host,
+        help='WiFi IP address of ESP32-C3 (default from config.json: {})'.format(
+            default_host or 'not set'
+        ),
+    )
+    parser.add_argument(
+        '--wifi-port',
+        type=int,
+        default=default_port,
+        help='WiFi TCP port (default from config.json or {})'.format(WIFI_PORT),
     )
     parser.add_argument('--baudrate', '-b', type=int, default=115200, help='Serial baudrate')
     parser.add_argument(
@@ -154,11 +222,29 @@ def build_parser():
 
 def make_send_fn(args):
     '''Build a send function based on selected mode and arguments.'''
-    port = args.port or find_serial_port()
-    if not port:
-        print('Error: No serial port found. Specify with --port.')
-        sys.exit(1)
-    return lambda cmd: send_via_com(cmd, port, args.baudrate)
+    mode = args.mode
+
+    if mode == 'com':
+        port = args.port or find_serial_port()
+        if not port:
+            print('Error: No serial port found. Specify with --port.')
+            sys.exit(1)
+        return lambda cmd: send_via_com(cmd, port, args.baudrate)
+
+    elif mode == 'wifi':
+        if not args.host:
+            print('Error: --host is required for WiFi mode (or set ESP32_IP in config.json).')
+            sys.exit(1)
+        return lambda cmd: send_via_wifi(cmd, args.host, args.wifi_port)
+
+    else:  # auto
+        send_fn = detect_auto_transport(
+            host=args.host, port=args.wifi_port, baudrate=args.baudrate
+        )
+        if send_fn is None:
+            print('Error: Could not connect via any transport.')
+            sys.exit(1)
+        return send_fn
 
 
 def main():

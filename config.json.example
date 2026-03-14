@@ -3,5 +3,20 @@
     "PIN_5V": 10,
     "PIN_VBAT": 3,
 
-    "ESP32_SERIAL_PORT": "COM3"
+    "ESP32_SERIAL_PORT": "COM3",
+
+    "WIFI": [
+        {
+            "SSID": "MyNetwork",
+            "PASSWORD": "MyPassword"
+        },
+        {
+            "SSID": "BackupNetwork"
+        }
+    ],
+    "ESP32_PORT": 8080,
+    "ESP32_IP": "192.168.1.111",
+    "ESP32_SUBNET": "255.255.255.0",
+    "ESP32_GATEWAY": "192.168.1.1",
+    "ESP32_DNS": "8.8.8.8"
 }

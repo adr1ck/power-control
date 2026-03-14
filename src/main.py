@@ -1,23 +1,14 @@
 # main.py — ESP32-C3 Power Control
-# Controls two output pins (5V, VBAT) via button, UART.
+# Controls two output pins (5V, VBAT) via button, UART, WiFi.
 
 import machine
+import network
 import select
+import socket
 import sys
 import time
-import json
 
-
-def load_config():
-    '''Load configuration from config.json file.'''
-    config = {}
-    try:
-        with open('config.json', 'r') as file:
-            config = json.load(file)
-        return config
-    except OSError:
-        print('[Config] config.json file not found')
-        return {}
+from boot import load_config
 
 
 # Configuration
@@ -39,6 +30,10 @@ long_press_triggered = False
 
 # UART
 uart_buffer = ''
+
+# WiFi
+WIFI_PORT = CONFIG.get('ESP32_PORT', 8080)
+wifi_server = None
 
 # Shared state
 state = {
@@ -147,22 +142,65 @@ def poll_uart():
             uart_buffer += char
 
 
+def start_wifi_server():
+    '''Start a non-blocking TCP server if WiFi is connected.'''
+    global wifi_server
+    station = network.WLAN(network.STA_IF)
+    if not station.isconnected():
+        print('[WiFi] Not connected — TCP server not started')
+        return
+
+    ip_address = station.ifconfig()[0]
+    wifi_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    wifi_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    wifi_server.bind(('0.0.0.0', WIFI_PORT))
+    wifi_server.listen(1)
+    wifi_server.setblocking(False)
+    print('[WiFi] TCP server listening on {}:{}'.format(ip_address, WIFI_PORT))
+
+
+def poll_wifi():
+    '''Accept connection, read command, respond, close.'''
+    if wifi_server is None:
+        return
+    try:
+        client, addr = wifi_server.accept()
+    except OSError:
+        return
+
+    try:
+        client.settimeout(2.0)
+        data = client.recv(256)
+        if data:
+            command = data.decode('utf-8').strip()
+            print('[WiFi] Command from {}: {}'.format(addr[0], command))
+            response = parse_command(command)
+            client.send((response + '\n').encode('utf-8'))
+    except Exception as e:
+        print('[WiFi] Error: {}'.format(e))
+    finally:
+        client.close()
+
+
 def main():
     print('=' * 40)
     print('  ESP32-C3 Power Control')
     print('  5V pin:   GPIO{}'.format(PIN_5V))
     print('  VBAT pin: GPIO{}'.format(PIN_VBAT))
-    print('  Button:   GPIO{}'.format(PIN_BUTTON))    
+    print('  Button:   GPIO{}'.format(PIN_BUTTON))
     print('=' * 40)
+
+    start_wifi_server()
 
     print('[Ready] Waiting for commands...')
     print('  Short press BOOT -> toggle 5V')
     print('  Long  press BOOT -> toggle VBAT')
-    print('  UART: "5V ON/OFF", "VBAT ON/OFF", "STATUS"')
+    print('  UART/WiFi: "5V ON/OFF", "VBAT ON/OFF", "STATUS"')
 
     while True:
         poll_button()
         poll_uart()
+        poll_wifi()
         time.sleep_ms(20)
 
 
