@@ -1,0 +1,10 @@
+# Environment configuration (contains passwords and secrets)
+config.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/

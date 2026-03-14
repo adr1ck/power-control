@@ -1,0 +1,5 @@
+{    
+    "PIN_BUTTON": 9,
+    "PIN_5V": 10,
+    "PIN_VBAT": 3
+}
