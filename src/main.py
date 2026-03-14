@@ -1,7 +1,9 @@
 # main.py — ESP32-C3 Power Control
-# Controls two output pins (5V, VBAT) via button.
+# Controls two output pins (5V, VBAT) via button, UART.
 
 import machine
+import select
+import sys
 import time
 import json
 
@@ -35,6 +37,9 @@ button_pressed = False
 button_press_start = 0
 long_press_triggered = False
 
+# UART
+uart_buffer = ''
+
 # Shared state
 state = {
     '5V': False,
@@ -58,6 +63,33 @@ def set_pin(channel, on):
 def toggle_pin(channel):
     '''Toggle the given channel.'''
     return set_pin(channel, not state[channel])
+
+
+def parse_command(raw):
+    '''
+    Parse a command string.
+    Supported commands:
+        5V ON / 5V OFF
+        VBAT ON / VBAT OFF
+        STATUS
+    Returns response string.
+    '''
+    cmd = raw.strip().upper()
+
+    if cmd == '5V ON':
+        return set_pin('5V', True)
+    elif cmd == '5V OFF':
+        return set_pin('5V', False)
+    elif cmd == 'VBAT ON':
+        return set_pin('VBAT', True)
+    elif cmd == 'VBAT OFF':
+        return set_pin('VBAT', False)
+    elif cmd == 'STATUS':
+        v5_status = 'ON' if state['5V'] else 'OFF'
+        vbat_status = 'ON' if state['VBAT'] else 'OFF'
+        return '5V is {}, VBAT is {}'.format(v5_status, vbat_status)
+    else:
+        return 'ERR: Unknown command "{}"'.format(raw.strip())
 
 
 def poll_button():
@@ -98,20 +130,39 @@ def poll_button():
     return False
 
 
+def poll_uart():
+    '''Read available bytes from UART/REPL and process complete lines.'''
+    global uart_buffer
+    while True:
+        select_result = select.select([sys.stdin], [], [], 0)
+        if not (select_result and sys.stdin in select_result[0]):
+            break
+        char = sys.stdin.read(1)
+        if char in ('\n', '\r'):
+            if uart_buffer:
+                response = parse_command(uart_buffer)
+                print(response)
+                uart_buffer = ''
+        else:
+            uart_buffer += char
+
+
 def main():
     print('=' * 40)
     print('  ESP32-C3 Power Control')
     print('  5V pin:   GPIO{}'.format(PIN_5V))
     print('  VBAT pin: GPIO{}'.format(PIN_VBAT))
-    print('  Button:   GPIO{}'.format(PIN_BUTTON))
+    print('  Button:   GPIO{}'.format(PIN_BUTTON))    
     print('=' * 40)
 
     print('[Ready] Waiting for commands...')
     print('  Short press BOOT -> toggle 5V')
     print('  Long  press BOOT -> toggle VBAT')
+    print('  UART: "5V ON/OFF", "VBAT ON/OFF", "STATUS"')
 
     while True:
         poll_button()
+        poll_uart()
         time.sleep_ms(20)
 
 
