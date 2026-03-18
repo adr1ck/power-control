@@ -1,6 +1,7 @@
 # main.py — ESP32-C3 Power Control
-# Controls two output pins (5V, VBAT) via button, UART, WiFi.
+# Controls two output pins (5V, VBAT) via button, UART, WiFi and Bluetooth.
 
+import bluetooth
 import machine
 import network
 import select
@@ -34,6 +35,14 @@ uart_buffer = ''
 # WiFi
 WIFI_PORT = CONFIG.get('ESP32_PORT', 8080)
 wifi_server = None
+
+# BLE
+BLE_DEVICE_NAME = CONFIG.get('ESP32_BLE_DEVICE_NAME', 'PowerCtrl')
+BLE_SERVICE_UUID = bluetooth.UUID(CONFIG.get('ESP32_BLE_SERVICE_UUID', ''))
+BLE_CHAR_UUID = bluetooth.UUID(CONFIG.get('ESP32_BLE_CHAR_UUID', ''))
+ble = bluetooth.BLE()
+ble_conn_handle = None
+ble_char_handle = None
 
 # Shared state
 state = {
@@ -182,6 +191,65 @@ def poll_wifi():
         client.close()
 
 
+def ble_irq(event, data):
+    '''BLE interrupt handler.'''
+    global ble_conn_handle
+
+    # Central connected
+    if event == 1:
+        ble_conn_handle = data[0]
+        print('[BLE] Device connected')
+
+    # Central disconnected — restart advertising
+    elif event == 2:
+        ble_conn_handle = None
+        print('[BLE] Device disconnected')
+        ble_start_advertising()
+
+    # Write from client
+    elif event == 3:
+        conn, attr = data
+        raw = ble.gatts_read(attr)
+        if raw:
+            command = raw.decode('utf-8').strip()
+            print('[BLE] Command: {}'.format(command))
+            response = parse_command(command)
+            if ble_char_handle is not None:
+                ble.gatts_write(ble_char_handle, 
+                                (response + '\n').encode('utf-8'))
+                if ble_conn_handle is not None:
+                    ble.gatts_notify(ble_conn_handle, ble_char_handle)
+
+
+def ble_start_advertising():
+    '''Start BLE advertising with device name.'''
+    name = BLE_DEVICE_NAME.encode('utf-8')
+    # Build advertising payload: flags + complete name
+    adv_data = bytearray(b'\x02\x01\x06')
+    adv_data += bytearray([len(name) + 1, 0x09]) + name
+    ble.gap_advertise(100_000, adv_data)
+    print('[BLE] Advertising as "{}"'.format(BLE_DEVICE_NAME))
+
+
+def start_ble():
+    '''Initialize BLE GATT server.'''
+    global ble_char_handle
+    ble.active(True)
+    ble.irq(ble_irq)
+
+    service = (
+        BLE_SERVICE_UUID,
+        (
+            (BLE_CHAR_UUID, 
+            bluetooth.FLAG_READ | bluetooth.FLAG_WRITE | bluetooth.FLAG_NOTIFY),
+        ),
+    )
+    ((ble_char_handle,),) = ble.gatts_register_services((service,))
+
+    ble_start_advertising()
+    print('[BLE] Service started')
+
+
 def main():
     print('=' * 40)
     print('  ESP32-C3 Power Control')
@@ -191,11 +259,12 @@ def main():
     print('=' * 40)
 
     start_wifi_server()
+    start_ble()
 
     print('[Ready] Waiting for commands...')
     print('  Short press BOOT -> toggle 5V')
     print('  Long  press BOOT -> toggle VBAT')
-    print('  UART/WiFi: "5V ON/OFF", "VBAT ON/OFF", "STATUS"')
+    print('  UART/WiFi/BLE: "5V ON/OFF", "VBAT ON/OFF", "STATUS"')
 
     while True:
         poll_button()

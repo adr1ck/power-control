@@ -4,6 +4,7 @@ power_control_cli.py — Host-side CLI for ESP32-C3 Power Control.
 Send commands (5V ON/OFF, VBAT ON/OFF, STATUS) over:
   - COM (serial/UART)
   - WiFi (TCP socket)
+  - Bluetooth Low Energy (BLE)
   - Auto-detect (tries COM → WiFi → BLE)
 
 Configuration via config.json:
@@ -14,11 +15,13 @@ Configuration via config.json:
 Usage:
     python power_control_cli.py --mode com --port COM3 "5V ON"
     python power_control_cli.py --mode wifi --host 192.168.1.111 "VBAT OFF"
+    python power_control_cli.py --mode ble "STATUS"
     python power_control_cli.py "5V ON"           # auto-detect
     python power_control_cli.py --interactive     # interactive REPL
 '''
 
 import argparse
+import asyncio
 import json
 import os
 import socket
@@ -47,6 +50,10 @@ def load_config():
 CONFIG = load_config()
 
 WIFI_PORT = CONFIG.get('ESP32_PORT', 8080) 
+
+BLE_DEVICE_NAME = CONFIG.get('ESP32_BLE_DEVICE_NAME', 'PowerCtrl')
+BLE_SERVICE_UUID = CONFIG.get('ESP32_BLE_SERVICE_UUID', '12345678-1234-1234-1234-123456789abc')
+BLE_CHAR_UUID = CONFIG.get('ESP32_BLE_CHAR_UUID', '12345678-1234-1234-1234-123456789abc')
 
 
 def send_via_com(command, port=None, baudrate=115200, timeout=2, ser=None):
@@ -111,6 +118,79 @@ def send_via_wifi(command, host, port=WIFI_PORT, timeout=3):
         return data.decode('utf-8').strip()
     
 
+class BleConnection:
+    '''Persistent BLE connection that reuses scan/connect across commands.'''
+
+    def __init__(self, timeout=10):
+        self._BleakClient = BleakClient
+        self._BleakScanner = BleakScanner
+        self._timeout = timeout
+        self._client = None
+        self._loop = asyncio.new_event_loop()
+
+    def _ensure_connected(self):
+        '''Connect if not already connected.'''
+        if self._client and self._client.is_connected:
+            return
+
+        async def _connect():
+            print('Scanning for BLE device "{}"...'.format(BLE_DEVICE_NAME))
+            device = await self._BleakScanner.find_device_by_name(
+                BLE_DEVICE_NAME, timeout=self._timeout
+            )
+            if device is None:
+                raise ConnectionError(
+                    'BLE device "{}" not found'.format(BLE_DEVICE_NAME)
+                )
+            print('Connecting to {}...'.format(device.address))
+            self._client = self._BleakClient(device)
+            await self._client.connect()
+            print('Connected.')
+
+        self._loop.run_until_complete(_connect())
+
+    def send(self, command):
+        '''Send a command over the persistent BLE connection.'''
+        self._ensure_connected()
+
+        async def _send():
+            response_event = asyncio.Event()
+            response_data = []
+
+            def notification_handler(sender, data):
+                response_data.append(data.decode('utf-8').strip())
+                response_event.set()
+
+            await self._client.start_notify(BLE_CHAR_UUID, notification_handler)
+            await self._client.write_gatt_char(
+                BLE_CHAR_UUID, (command + '\n').encode('utf-8')
+            )
+            await asyncio.wait_for(response_event.wait(), timeout=5)
+            await self._client.stop_notify(BLE_CHAR_UUID)
+            return '\n'.join(response_data)
+
+        return self._loop.run_until_complete(_send())
+
+    def close(self):
+        '''Disconnect and clean up.'''
+        if self._client:
+            try:
+                self._loop.run_until_complete(self._client.disconnect())
+            except Exception:
+                pass
+            self._client = None
+        self._loop.close()
+
+
+def send_via_ble(command, timeout=10):
+    '''Send command over BLE and return response (one-off connection).'''
+    conn = BleConnection(timeout=timeout)
+    try:
+        return conn.send(command)
+    finally:
+        conn.close()
+
+
 def detect_auto_transport(host=None, port=None, baudrate=115200):
     '''Probe transports with STATUS command, return send_fn for the first working one.'''
 
@@ -135,6 +215,16 @@ def detect_auto_transport(host=None, port=None, baudrate=115200):
             return lambda cmd: send_via_wifi(cmd, host, wifi_port)
         except Exception as e:
             print('[Auto] WiFi failed: {}'.format(e))
+
+    # 3. Try BLE
+    try:
+        print('[Auto] Trying BLE...')
+        conn = BleConnection()
+        resp = conn.send('STATUS')
+        print('[Auto] BLE connected: {}'.format(resp))
+        return conn.send
+    except Exception as e:
+        print('[Auto] BLE failed: {}'.format(e))
 
     return None
 
@@ -178,6 +268,7 @@ def build_parser():
             '  python power_control_cli.py "5V ON"\n'
             '  python power_control_cli.py --mode com --port COM3 "VBAT OFF"\n'
             '  python power_control_cli.py --mode wifi --host 192.168.1.111 "STATUS"\n'
+            '  python power_control_cli.py --mode ble "5V OFF"\n'
             '  python power_control_cli.py --interactive\n'
         ),
     )
@@ -188,7 +279,7 @@ def build_parser():
     )
     parser.add_argument(
         '--mode', '-m',
-        choices=['auto', 'com', 'wifi'],
+        choices=['auto', 'com', 'wifi', 'ble'],
         default='auto',
         help='Transport mode (default: auto)',
     )
@@ -236,6 +327,10 @@ def make_send_fn(args):
             print('Error: --host is required for WiFi mode (or set ESP32_IP in config.json).')
             sys.exit(1)
         return lambda cmd: send_via_wifi(cmd, args.host, args.wifi_port)
+
+    elif mode == 'ble':
+        conn = BleConnection()
+        return conn.send
 
     else:  # auto
         send_fn = detect_auto_transport(

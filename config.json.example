@@ -18,5 +18,9 @@
     "ESP32_IP": "192.168.1.111",
     "ESP32_SUBNET": "255.255.255.0",
     "ESP32_GATEWAY": "192.168.1.1",
-    "ESP32_DNS": "8.8.8.8"
+    "ESP32_DNS": "8.8.8.8",
+
+    "ESP32_BLE_DEVICE_NAME": "PowerCtrl",
+    "ESP32_BLE_SERVICE_UUID": "70c85ebd-fe33-43b3-9e61-c784bcbd7598",
+    "ESP32_BLE_CHAR_UUID": "54ecd126-239a-4911-be8a-0046550d9eed"
 }
