@@ -94,17 +94,14 @@ def send_via_com(command, port=None, baudrate=115200, timeout=2, ser=None):
 
 
 def find_serial_port():
-    '''Auto-detect the first available serial port.'''
+    '''Auto-detect ESP32 serial port. Returns None if no ESP32-specific port found.'''
     ports = list(list_ports.comports())
     for port_info in ports:
         description = (port_info.description or '').lower()
         vid = port_info.vid
         # ESP32-C3 common USB VID (Espressif)
-        if vid == 0x303A or 'cp210' in description or 'ch340' in description or 'usb' in description:
+        if vid == 0x303A or 'cp210' in description or 'ch340' in description:
             return port_info.device
-    # Fallback: return first port if any
-    if ports:
-        return ports[0].device
     return None
 
 
