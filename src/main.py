@@ -17,8 +17,8 @@ CONFIG = load_config()
 
 # GPIO / Button
 PIN_BUTTON = CONFIG.get('PIN_BUTTON', 9)
-PIN_5V = CONFIG.get('PIN_5V', 10)
-PIN_VBAT = CONFIG.get('PIN_VBAT', 3)
+PIN_5V = CONFIG.get('PIN_5V', 8)
+PIN_VBAT = CONFIG.get('PIN_VBAT', 21)
 LONG_PRESS_MS = 800     # Threshold to distinguish short/long press
 pin_button = machine.Pin(PIN_BUTTON, machine.Pin.IN, machine.Pin.PULL_UP)
 pin_5v = machine.Pin(PIN_5V, machine.Pin.OUT, value=0)
