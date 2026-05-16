@@ -88,8 +88,7 @@ def send_via_com(command, port=None, baudrate=115200, timeout=2, ser=None):
 
         return '\n'.join(response_lines) if response_lines else '(no response)'
     finally:
-        # Don't close in single-command mode to avoid port close glitches
-        if not own_conn:
+        if own_conn:
             ser.close()
 
 
@@ -197,8 +196,10 @@ def detect_auto_transport(host=None, port=None, baudrate=115200):
         try:
             print('[Auto] Trying COM ({})...'.format(serial_port))
             resp = send_via_com('STATUS', serial_port, baudrate)
-            print('[Auto] COM connected: {}'.format(resp))
-            return lambda cmd: send_via_com(cmd, serial_port, baudrate)
+            if resp and resp != '(no response)':
+                print('[Auto] COM connected: {}'.format(resp))
+                return lambda cmd: send_via_com(cmd, serial_port, baudrate)
+            print('[Auto] COM failed: no response')
         except Exception as e:
             print('[Auto] COM failed: {}'.format(e))
 
